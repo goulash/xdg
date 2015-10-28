@@ -4,125 +4,97 @@
 
 // Package xdg provides an implementation of the XDG Base Directory Specification.
 //
-// On initialization of this package (happens automatically), the following
-// variables are set to their recommended values:
+// On initialization, the following package variables are set to their recommended
+// values, by reading the corresponding environment variables and falling back to
+// specification defaults if necessary.
 //
-//  ConfigHome
-//  DataHome
-//  CacheHome
-//  RuntimeDir
-//  ConfigDirs
-//  DataDirs
+//     ConfigHome      // user configuration base directory, e.g. ~/.config
+//     DataHome        // user data files base directory, e.g. ~/.local/share
+//     CacheHome       // user cache files base directory, e.g. ~/.cache
+//     RuntimeDir      // user runtime files base directory, e.g. /run/user/1000
+//     ConfigDirs      // global configuration directories, e.g. /etc/xdg
+//     DataDirs        // global data files directories, e.g. /usr/local/share
+//     AllConfigDirs   // user and global configuration directories
+//     AllDataDirs     // user and global data directories
 //
-// These values are defined based on XDG_* environment variables and defaults.
-// If no valid path can be construed, the variable is left blank. Depending
-// on your use case, this may or may not pose a problem.
-// They are meant to be read-only; do not change them unless you are absolutely
-// sure of what you are doing.
+// Initialization happens automatically, but can also be explicitely started with
+// the Init function. If no valid path can be constructed, the variable is left
+// blank or empty. If one of the required paths is blank or empty, the program
+// should fail. These variables should be treated as read-only; change them only
+// if you know what you are doing.
 //
-// Using the following classes of functions usually suffices for most needs:
+// The package has four classes of functions, which should suffice for most needs:
 //
-//  User*       correctly join filepath for user files
-//  Find*       find relevant files according to XDG specification
-//  Merge*      process multiple found configuration/data files
-//  Open*       open, creating if necessary, given file
+//     User*           // construct a valid path for user (config|data|...) files
+//     Find*           // find existing (config|data|...) files
+//     Merge*          // execute a function on each found (config|data) file
+//     Open*           // open or create a user (config|data|...) file
 //
-// The XDG Base Directory Specification, henceforth “the specification” defines
+// Only the Open* functions may alter the filesystem in any way: this is
+// restricted to creating XDG user base directories and files therein. Directories
+// in ConfigDirs and DataDirs are not modified.
+//
+// The XDG Base Directory Specification, henceforth “the specification”, defines
 // several types of files: configuration, data, cache, and runtime files.
-// For more information on the specification, see:
+// The specification can be found at:
 //
-//  http://standards.freedesktop.org/basedir-spec/basedir-spec-latest.html
-//
+//     http://standards.freedesktop.org/basedir-spec/basedir-spec-latest.html
 //
 // Configuration files
 //
-// User-specific configuration files are written in a single base directory,
-// defined by the environment variable $XDG_CONFIG_HOME.
+// Configuration files are read from ConfigHome and from ConfigDirs;
+// they are only written in ConfigHome.
 //
-// If $XDG_CONFIG_HOME is not set, the default "$HOME/.config" is used.
+// ConfigHome is a single base directory relative to which user-specific data
+// files should be written. This directory is defined by the environment
+// variable $XDG_DATA_HOME. If $XDG_CONFIG_HOME is not set, the default
+// "$HOME/.config" is used.
 //
 // ConfigDirs is a set of preference ordered base directories relative to
 // which configuration files should be searched. This set of directories is
 // defined by the environment variable $XDG_CONFIG_DIRS. The directories in
-// $XDG_CONFIG_DIRS should be seperated with a colon ':'.
+// $XDG_CONFIG_DIRS should be seperated with a colon ':'. If $XDG_CONFIG_DIRS
+// is not set, the default "/etc/xdg" is used.
 //
-// If $XDG_CONFIG_DIRS is not set, the default "/etc/xdg" is used.
-//
+// ConfigHomeDirs combines ConfigHome and ConfigDirs into one preference
+// ordered set of directories.
 //
 // Data files
 //
-// DataHome is a single base directory relative to which user-specific data
-// files should be written. This directory is defined by the environment
-// variable $XDG_DATA_HOME.
+// Data files are read from DataHome and from DataDirs;
+// they are only written in DataHome.
 //
-// If $XDG_DATA_HOME is not set, the default "$HOME/.local/share" is used.
-//
-// DataDirs is a set of preference ordered base directories relative to
-// which data files should be searched. This set of directories is defined
-// by the environment variable $XDG_DATA_DIRS.
-//
-// If $XDG_CONFIG_DIRS is not set, the default "/usr/local/share:/usr/share"
+// DataHome is a single base directory relative to which user-specific data files
+// should be written. This directory is defined by the environment variable
+// $XDG_DATA_HOME. If $XDG_DATA_HOME is not set, the default "$HOME/.local/share"
 // is used.
 //
+// DataDirs is a set of preference ordered base directories relative to which data
+// files should be searched. This set of directories is defined by the environment
+// variable $XDG_DATA_DIRS. If $XDG_CONFIG_DIRS is not set, the default
+// "/usr/local/share:/usr/share" is used.
 //
 // Cache files
 //
 // CacheHome is a single base directory relative to which user-specific
-// non-essential (cached) data should be written. This directory is defined
-// by the environment variable $XDG_CACHE_HOME.
-//
-// If $XDG_CACHE_HOME is not set, the default "$HOME/.cache" is used.
-//
+// non-essential (cached) data should be written. This directory is defined by the
+// environment variable $XDG_CACHE_HOME.  If $XDG_CACHE_HOME is not set, the
+// default "$HOME/.cache" is used.
 //
 // Runtime files
 //
 // RuntimeDir is a single base directory relative to which user-specific
 // runtime files and other file objects should be placed. This directory is
-// defined by the environment variable $XDG_RUNTIME_DIR.
+// defined by the environment variable $XDG_RUNTIME_DIR. If $XDG_RUNTIME_DIR
+// is not set, the following method is used to find an appropriate directory:
 //
-// The specification has the following to say about $XDG_RUNTIME_DIR:
+//     path.Join(os.TempDir(), fmt.Sprintf("xdg-%d", os.Getuid()))
 //
-//  $XDG_RUNTIME_DIR defines the base directory relative to which
-//  user-specific non-essential runtime files and other file objects (such
-//  as sockets, named pipes, ...) should be stored. The directory MUST be
-//  owned by the user, and he MUST be the only one having read and write
-//  access to it. Its Unix access mode MUST be 0700.
+// This usually results in paths such as "/tmp/xdg-1000". Normally, we expect
+// something along the lines of "/run/user/1000".
 //
-//  The lifetime of the directory MUST be bound to the user being logged in.
-//  It MUST be created when the user first logs in and if the user fully
-//  logs out the directory MUST be removed. If the user logs in more than
-//  once he should get pointed to the same directory, and it is mandatory
-//  that the directory continues to exist from his first login to his last
-//  logout on the system, and not removed in between. Files in the directory
-//  MUST not survive reboot or a full logout/login cycle.
-//
-//  The directory MUST be on a local file system and not shared with any
-//  other system. The directory MUST by fully-featured by the standards of
-//  the operating system. More specifically, on Unix-like operating systems
-//  AF_UNIX sockets, symbolic links, hard links, proper permissions, file
-//  locking, sparse files, memory mapping, file change notifications,
-//  a reliable hard link count must be supported, and no restrictions on the
-//  file name character set should be imposed. Files in this directory MAY
-//  be subjected to periodic clean-up. To ensure that your files are not
-//  removed, they should have their access time timestamp modified at least
-//  once every 6 hours of monotonic time or the 'sticky' bit should be set
-//  on the file.
-//
-//  If $XDG_RUNTIME_DIR is not set applications should fall back to
-//  a replacement directory with similar capabilities and print a warning
-//  message. Applications should use this directory for communication and
-//  synchronization purposes and should not place larger files in it, since
-//  it might reside in runtime memory and cannot necessarily be swapped out
-//  to disk.
-//
-// In this implementation, we assume that the system takes care of removing
-// the XDG runtime directory at shutdown.
-//
-// If $XDG_RUNTIME_DIR is not set, this implementation probably uses something
-// like "/tmp/xdg-1000", where "/tmp" is the system temporary directory, and
-// "1000" is the current user ID.
-//
-// This package takes inspiration from github.com/adrg/xdg. Many thanks.
+// In this implementation, we assume that the system takes care of removing the
+// XDG runtime directory at shutdown.
 package xdg
 
 import (
@@ -152,7 +124,7 @@ var (
 	Errors []error
 
 	// ErrInvalidHome is found in the Errors slice if the HOME environment variable
-	// is not set.
+	// is not set or it is not an absolute path.
 	ErrInvalidHome = errors.New("environment variable HOME is invalid or not set")
 
 	// ErrInvalidPath is returned when attempting to create or open an invalid path.
@@ -185,11 +157,11 @@ var (
 	// which data files should be searched.
 	DataDirs []string
 
-	// AllConfigDirs is the same as ConfigDirs, with ConfigHome at first place.
-	AllConfigDirs []string
+	// ConfigHomeDirs is the same as ConfigDirs, with ConfigHome at first place.
+	ConfigHomeDirs []string
 
-	// AllDataDirs is the same as DataDirs, with DataHome at first place.
-	AllDataDirs []string
+	// DataHomeDirs is the same as DataDirs, with DataHome at first place.
+	DataHomeDirs []string
 
 	// home is a single base directory of the user's home directory.
 	// This directory is defined by the environment variable $HOME.
@@ -224,8 +196,8 @@ func Init() {
 	RuntimeDir = xdgPath("XDG_RUNTIME_DIR", tmp)
 	ConfigDirs = xdgPaths("XDG_CONFIG_DIRS", "/etc/xdg")
 	DataDirs = xdgPaths("XDG_DATA_DIRS", "/usr/local/share:/usr/share")
-	AllConfigDirs = combine(ConfigHome, ConfigDirs)
-	AllDataDirs = combine(DataHome, DataDirs)
+	ConfigHomeDirs = combine(ConfigHome, ConfigDirs)
+	DataHomeDirs = combine(DataHome, DataDirs)
 }
 
 func xdgPath(env, def string) string {
@@ -272,6 +244,8 @@ func xdgPaths(env, def string) []string {
 	return fs
 }
 
+// combine x and xs to a single slice, where x is in the front.
+// If x is empty, xs is returned.
 func combine(x string, xs []string) []string {
 	if x == "" {
 		return xs
@@ -303,12 +277,12 @@ func join(dir, file string) string {
 	return p
 }
 
-func FindConfig(file string) string      { return find(file, AllConfigDirs) }
-func FindData(file string) string        { return find(file, AllDataDirs) }
+func FindConfig(file string) string      { return find(file, ConfigHomeDirs) }
+func FindData(file string) string        { return find(file, DataHomeDirs) }
 func FindCache(file string) string       { return find(file, []string{CacheHome}) }
 func FindRuntime(file string) string     { return find(file, []string{RuntimeDir}) }
-func FindAllConfig(file string) []string { return findAll(file, AllConfigDirs) }
-func FindAllData(file string) []string   { return findAll(file, AllDataDirs) }
+func FindAllConfig(file string) []string { return findAll(file, ConfigHomeDirs) }
+func FindAllData(file string) []string   { return findAll(file, DataHomeDirs) }
 
 // find returns the first file that exists, else "".
 func find(file string, paths []string) string {
@@ -342,14 +316,14 @@ func findAll(file string, paths []string) []string {
 // hasn't occurred, but no files need be further inspected, Skip can be returned.
 type MergeFunc func(filepath string) error
 
-// Skip can be returned by a MergeFunc which causes the Merge*Files functions
+// Skip can be returned by a MergeFunc which causes the Merge* functions
 // to skip the rest of the files to be merged.
 var Skip = errors.New("skip the rest of the files to be merged")
 
-func MergeConfig(file string, f MergeFunc) error  { return merge(file, f, AllConfigDirs) }
-func MergeConfigR(file string, f MergeFunc) error { return mergeR(file, f, AllConfigDirs) }
-func MergeData(file string, f MergeFunc) error    { return merge(file, f, AllDataDirs) }
-func MergeDataR(file string, f MergeFunc) error   { return mergeR(file, f, AllDataDirs) }
+func MergeConfig(file string, f MergeFunc) error  { return merge(file, f, ConfigHomeDirs) }
+func MergeConfigR(file string, f MergeFunc) error { return mergeR(file, f, ConfigHomeDirs) }
+func MergeData(file string, f MergeFunc) error    { return merge(file, f, DataHomeDirs) }
+func MergeDataR(file string, f MergeFunc) error   { return mergeR(file, f, DataHomeDirs) }
 
 func mergeR(file string, f MergeFunc, paths []string) error {
 	var err error
