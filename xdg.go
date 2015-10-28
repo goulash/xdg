@@ -22,6 +22,7 @@
 //
 // Using the following classes of functions usually suffices for most needs:
 //
+//  User*       correctly join filepath for user files
 //  Find*       find relevant files according to XDG specification
 //  Merge*      process multiple found configuration/data files
 //  Open*       open, creating if necessary, given file
@@ -117,26 +118,49 @@
 // In this implementation, we assume that the system takes care of removing
 // the XDG runtime directory at shutdown.
 //
-// If $XDG_RUNTIME_DIR is not set, this implementation fails FOR NOW.
+// If $XDG_RUNTIME_DIR is not set, this implementation probably uses something
+// like "/tmp/xdg-1000", where "/tmp" is the system temporary directory, and
+// "1000" is the current user ID.
 //
 // This package takes inspiration from github.com/adrg/xdg. Many thanks.
 package xdg
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path"
 	"strings"
 )
 
-var (
-	// home is a single base directory of the user's home directory.
-	// This directory is defined by the environment variable $HOME.
-	//
-	// If $HOME is not set, and is required, then this implementation errors
-	// out.
-	home string
+// Getenv reads several environment variables. You can provide your own
+// implementation if you have special needs (e.g. mock testing).
+// If you change Getenv, you need to call Init() again.
+// The following variables are read:
+//
+//  HOME
+//  XDG_CONFIG_HOME
+//  XDG_DATA_HOME
+//  XDG_CACHE_HOME
+//  XDG_RUNTIME_DIR
+//  XDG_CONFIG_DIRS
+//  XDG_DATA_DIRS
+var Getenv func(string) string = os.Getenv
 
+var (
+	// Errors contains all errors that occurred during initialization.
+	Errors []error
+
+	// ErrInvalidHome is found in the Errors slice if the HOME environment variable
+	// is not set.
+	ErrInvalidHome = errors.New("environment variable HOME is invalid or not set")
+
+	// ErrInvalidPath is returned when attempting to create or open an invalid path.
+	// This means that some XDG variable could not be correctly set.
+	ErrInvalidPath = errors.New("invalid XDG path used")
+)
+
+var (
 	// ConfigHome is a single base directory relative to which user-specific
 	// configuration files should be written.
 	ConfigHome string
@@ -160,30 +184,52 @@ var (
 	// DataDirs is a set of preference ordered base directories relative to
 	// which data files should be searched.
 	DataDirs []string
+
+	// AllConfigDirs is the same as ConfigDirs, with ConfigHome at first place.
+	AllConfigDirs []string
+
+	// AllDataDirs is the same as DataDirs, with DataHome at first place.
+	AllDataDirs []string
+
+	// home is a single base directory of the user's home directory.
+	// This directory is defined by the environment variable $HOME.
+	//
+	// If $HOME is not set, and is required, then other variables might be empty.
+	home string
 )
 
-// Errors contains all errors that occurred during initialization.
-var Errors []error
-
-var ErrHomeInvalid = errors.New("environment variable HOME is invalid or not set")
-
 func init() {
-	home = os.Getenv("HOME")
+	Init()
+}
+
+// Init initializes this package, reading several environment variables
+// (using Getenv, which you can override if you need to), and setting
+// several package variables.
+//
+// It is normally not necessary to call Init; you only need to do so
+// if you would like to reset the package (e.g. because you changed
+// Getenv).
+func Init() {
+	Errors = []error{}
+	home = Getenv("HOME")
 	if path.IsAbs(home) {
 		home = ""
-		Errors = append(Errors, ErrHomeInvalid)
+		Errors = append(Errors, ErrInvalidHome)
 	}
 
 	ConfigHome = xdgPath("XDG_CONFIG_HOME", "$HOME/.config")
 	DataHome = xdgPath("XDG_DATA_HOME", "$HOME/.config")
 	CacheHome = xdgPath("XDG_CACHE_HOME", "$HOME/.config")
-	RuntimeDir = xdgPath("XDG_RUNTIME_DIR", "")
+	tmp := path.Join(os.TempDir(), fmt.Sprintf("xdg-%d", os.Getuid()))
+	RuntimeDir = xdgPath("XDG_RUNTIME_DIR", tmp)
 	ConfigDirs = xdgPaths("XDG_CONFIG_DIRS", "/etc/xdg")
 	DataDirs = xdgPaths("XDG_DATA_DIRS", "/usr/local/share:/usr/share")
+	AllConfigDirs = combine(ConfigHome, ConfigDirs)
+	AllDataDirs = combine(DataHome, DataDirs)
 }
 
 func xdgPath(env, def string) string {
-	x := os.Getenv(env)
+	x := Getenv(env)
 
 	if x == "" {
 		if strings.Contains(def, "$HOME") {
@@ -207,15 +253,15 @@ func xdgPath(env, def string) string {
 	return ""
 }
 
-func xdgPath(env, def string) []string {
-	xs := os.Getenv(env)
+func xdgPaths(env, def string) []string {
+	xs := Getenv(env)
 
 	if xs == "" {
 		xs = def
 	}
 
 	var fs []string
-	for _, x := range strings.Split(xs, ":") {
+	for _, x := range strings.Split(xs, string(os.PathListSeparator)) {
 		// See comment in xdgPath.
 		if path.IsAbs(x) {
 			fs = append(fs, x)
@@ -226,38 +272,88 @@ func xdgPath(env, def string) []string {
 	return fs
 }
 
-func OpenConfigFile(p string) (*os.File, error)  { return nil, nil }
-func OpenDataFile(p string) (*os.File, error)    { return nil, nil }
-func OpenCacheFile(p string) (*os.File, error)   { return nil, nil }
-func OpenRuntimeFile(p string) (*os.File, error) { return nil, nil }
+func combine(x string, xs []string) []string {
+	if x == "" {
+		return xs
+	}
 
-func FindConfigFiles(p string) []string { return nil }
-func FindDataFiles(p string) []string   { return nil }
-func FindConfigFile(p string) string    { return "" }
-func FindDataFile(p string) string      { return "" }
-func FindCacheFile(p string) string     { return "" }
-func FindRuntimeFile(p string) string   { return "" }
+	n := len(xs) + 1
+	ns := make([]string, n)
 
-// MergeFunc is given to the Merge*Files functions to handle the files that it
+	ns[0] = x
+	for i := 1; i < n; i++ {
+		ns[i] = xs[i-1]
+	}
+	return ns
+}
+
+func UserConfig(file string) string  { return join(ConfigHome, file) }
+func UserData(file string) string    { return join(DataHome, file) }
+func UserCache(file string) string   { return join(CacheHome, file) }
+func UserRuntime(file string) string { return join(RuntimeDir, file) }
+
+func join(dir, file string) string {
+	if dir == "" {
+		return ""
+	}
+	p := path.Join(dir, file)
+	if !path.IsAbs(p) {
+		return ""
+	}
+	return p
+}
+
+func FindConfig(file string) string      { return find(file, AllConfigDirs) }
+func FindData(file string) string        { return find(file, AllDataDirs) }
+func FindCache(file string) string       { return find(file, []string{CacheHome}) }
+func FindRuntime(file string) string     { return find(file, []string{RuntimeDir}) }
+func FindAllConfig(file string) []string { return findAll(file, AllConfigDirs) }
+func FindAllData(file string) []string   { return findAll(file, AllDataDirs) }
+
+// find returns the first file that exists, else "".
+func find(file string, paths []string) string {
+	for _, dir := range paths {
+		p := join(dir, file)
+		if _, err := os.Stat(p); err != nil {
+			continue
+		}
+		return p
+	}
+	return ""
+}
+
+func findAll(file string, paths []string) []string {
+	ps := make([]string, 0, len(paths))
+	for _, dir := range paths {
+		p := join(dir, file)
+		if _, err := os.Stat(p); err != nil {
+			continue
+		}
+		ps = append(ps, p)
+	}
+	return ps
+}
+
+// MergeFunc is given to the Merge* functions to handle the files that it
 // finds. It receives an absolute path to a file, which MergeFunc can then try
 // to open. When MergeFunc is done with the file (for example, it couldn't read
 // the file, or it was empty) then it can return nil. If an error is returned,
-// then the Merge*Files function aborts and returns this error. If an error
+// then the Merge* function aborts and returns this error. If an error
 // hasn't occurred, but no files need be further inspected, Skip can be returned.
-type MergeFunc func(string) error
+type MergeFunc func(filepath string) error
 
 // Skip can be returned by a MergeFunc which causes the Merge*Files functions
 // to skip the rest of the files to be merged.
 var Skip = errors.New("skip the rest of the files to be merged")
 
-func MergeDataFiles(p string, f MergeFunc) error    { return merge(p, f, DataHome, DataDirs...) }
-func MergeDataFilesR(p string, f MergeFunc) error   { return mergeR(p, f, DataHome, DataDirs...) }
-func MergeConfigFiles(p string, f MergeFunc) error  { return merge(p, f, ConfigHome, ConfigDirs...) }
-func MergeConfigFilesR(p string, f MergeFunc) error { return mergeR(p, f, ConfigHome, ConfigDirs...) }
+func MergeConfig(file string, f MergeFunc) error  { return merge(file, f, AllConfigDirs) }
+func MergeConfigR(file string, f MergeFunc) error { return mergeR(file, f, AllConfigDirs) }
+func MergeData(file string, f MergeFunc) error    { return merge(file, f, AllDataDirs) }
+func MergeDataR(file string, f MergeFunc) error   { return mergeR(file, f, AllDataDirs) }
 
-func mergeR(p string, f MergeFunc, paths ...string) error {
+func mergeR(file string, f MergeFunc, paths []string) error {
 	var err error
-	for _, s := range findR(p, paths...) {
+	for s := range reverse(findAll(file, paths)) {
 		if err = f(s); err != nil {
 			break
 		}
@@ -268,9 +364,9 @@ func mergeR(p string, f MergeFunc, paths ...string) error {
 	return err
 }
 
-func merge(p string, f MergeFunc, paths ...string) error {
+func merge(file string, f MergeFunc, paths []string) error {
 	var err error
-	for _, s := range find(p, paths...) {
+	for _, s := range findAll(file, paths) {
 		if err = f(s); err != nil {
 			break
 		}
@@ -279,4 +375,76 @@ func merge(p string, f MergeFunc, paths ...string) error {
 		return nil
 	}
 	return err
+}
+
+func reverse(xs []string) <-chan string {
+	ch := make(chan string)
+	go func() {
+		for i := len(xs); i != 0; i-- {
+			ch <- xs[i-1]
+		}
+		close(ch)
+	}()
+	return ch
+}
+
+func OpenConfig(file string, flag int) (*os.File, error) { return open(UserConfig(file), flag) }
+func OpenData(file string, flag int) (*os.File, error)   { return open(UserData(file), flag) }
+func OpenCache(file string, flag int) (*os.File, error)  { return open(UserCache(file), flag) }
+func OpenRuntime(file string, flag int) (*os.File, error) {
+	// TODO: Make sure that the runtime directory is only readable by the user.
+	_, err := os.Stat(RuntimeDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			err = os.MkdirAll(RuntimeDir, os.ModeDir|0700)
+			if err != nil {
+				return nil, err
+			}
+			_, err = os.Stat(RuntimeDir)
+			if err != nil {
+				// This really should never happen, but you never know!
+				return nil, err
+			}
+		} else {
+			return nil, err
+		}
+	}
+
+	err = os.Chown(RuntimeDir, os.Getuid(), os.Getgid())
+	if err != nil {
+		return nil, err
+	}
+
+	return open(UserRuntime(file), flag)
+}
+
+// open opens the given file with the appropriate flag and permission.
+// The flag should be specified, depending on purpose. If O_CREATE is
+// given, directories leading to the flag are also created.
+//
+//  O_RDONLY    open the file read-only.
+//  O_WRONLY    open the file write-only.
+//  O_RDWR      open the file read-write.
+//  O_APPEND    append data to the file when writing.
+//  O_CREATE    create a new file if none exists.
+//  O_EXCL      used with O_CREATE, file must not exist
+//  O_SYNC      open for synchronous I/O.
+//  O_TRUNC     if possible, truncate file when opened.
+func open(file string, flag int) (*os.File, error) {
+	if file == "" {
+		return nil, ErrInvalidPath
+	}
+
+	if flag&os.O_CREATE != 0 {
+		// Check if we need to try to create a directory.
+		dir := path.Dir(file)
+		if _, err := os.Stat(dir); os.IsNotExist(err) {
+			err = os.MkdirAll(dir, os.ModeDir|0700)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	return os.OpenFile(file, flag, 0700)
 }
