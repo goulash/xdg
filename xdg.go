@@ -190,8 +190,8 @@ func Init() {
 	}
 
 	ConfigHome = xdgPath("XDG_CONFIG_HOME", "$HOME/.config")
-	DataHome = xdgPath("XDG_DATA_HOME", "$HOME/.config")
-	CacheHome = xdgPath("XDG_CACHE_HOME", "$HOME/.config")
+	DataHome = xdgPath("XDG_DATA_HOME", "$HOME/.local/share")
+	CacheHome = xdgPath("XDG_CACHE_HOME", "$HOME/.cache")
 	tmp := path.Join(os.TempDir(), fmt.Sprintf("xdg-%d", os.Getuid()))
 	RuntimeDir = xdgPath("XDG_RUNTIME_DIR", tmp)
 	ConfigDirs = xdgPaths("XDG_CONFIG_DIRS", "/etc/xdg")
