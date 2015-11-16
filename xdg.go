@@ -184,7 +184,7 @@ func init() {
 func Init() {
 	Errors = []error{}
 	home = Getenv("HOME")
-	if path.IsAbs(home) {
+	if !path.IsAbs(home) {
 		home = ""
 		Errors = append(Errors, ErrInvalidHome)
 	}
