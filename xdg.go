@@ -411,14 +411,26 @@ func open(file string, flag int) (*os.File, error) {
 
 	if flag&os.O_CREATE != 0 {
 		// Check if we need to try to create a directory.
-		dir := path.Dir(file)
-		if _, err := os.Stat(dir); os.IsNotExist(err) {
-			err = os.MkdirAll(dir, os.ModeDir|0700)
-			if err != nil {
-				return nil, err
-			}
+		err := MkdirAll(path.Dir(file))
+		if err != nil {
+			return nil, err
 		}
 	}
 
 	return os.OpenFile(file, flag, 0700)
+}
+
+// MkdirAll creates dirpath if it does not already exist.
+//
+// Example:
+//
+//  xdg.MkdirAll(xdg.UserData("dromi"))
+//  db, err := OpenDatabase(xdg.UserData("dromi/datbase.db"))
+//
+func MkdirAll(dirpath string) error {
+	// TODO: am I swallowing err?
+	if _, err := os.Stat(dirpath); os.IsNotExist(err) {
+		return os.MkdirAll(dirpath, os.ModeDir|0700)
+	}
+	return nil
 }
